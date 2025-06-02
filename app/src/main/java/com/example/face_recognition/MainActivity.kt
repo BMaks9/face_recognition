@@ -29,13 +29,13 @@ class MainActivity : ComponentActivity() {
 
         requestPermissionLauncher.launch(Manifest.permission.CAMERA)
 
-        setContent {
+
             setContent {
                 Surface(color = MaterialTheme.colors.background) {
                     if (cameraPermissionGranted) {
                         CameraPreview()
                     }
-                }
+
             }
             }
         }
