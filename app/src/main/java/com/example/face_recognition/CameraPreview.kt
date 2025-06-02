@@ -2,6 +2,7 @@ package com.example.face_recognition
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.util.Log
 import android.util.Size
 import android.view.ViewGroup
 import androidx.camera.core.*
@@ -62,10 +63,17 @@ private fun startCamera(
             .setTargetResolution(Size(640, 480))
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .build()
-            .also {
-                val analyzerExecutor = Executors.newSingleThreadExecutor()
-                it.setAnalyzer(analyzerExecutor, CameraAnalyzer())
+
+        val analyzerExecutor = Executors.newSingleThreadExecutor()
+
+        imageAnalyzer.setAnalyzer(analyzerExecutor, FaceDetectionAnalyzer { faces ->
+            // Здесь у тебя список лиц в кадре, можешь логировать, рисовать или анализировать
+            Log.d("FaceDetection", "Найдено лиц: ${faces.size}")
+
+            for (face in faces) {
+                Log.d("FaceDetection", "Лицо с трекинг ID: ${face.trackingId}, bounding box: ${face.boundingBox}")
             }
+        })
 
         val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
 
