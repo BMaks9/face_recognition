@@ -34,7 +34,7 @@ data class KnownPerson(
     // List<FloatArray> -> List<List<Float>>
 )
 
-private const val SIMILARITY_THRESHOLD = 0.8f
+private const val SIMILARITY_THRESHOLD = 0.85f
 
 
 @SuppressLint("RestrictedApi")
@@ -56,7 +56,7 @@ fun CameraPreview(modifier: Modifier = Modifier) {
     }
 
     val previewViewSize = remember { mutableStateOf(android.util.Size(0, 0)) }
-    val imageSize = android.util.Size(640, 480)
+    val imageSize = android.util.Size(1280, 720)
     val isFrontCamera = true
 
     val faceNames = remember { mutableStateListOf<String>() }
@@ -178,7 +178,7 @@ private fun startCamera(
             }
 
         val imageAnalyzer = ImageAnalysis.Builder()
-            .setTargetResolution(Size(640, 480))
+            .setTargetResolution(Size(1280, 720))
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .build()
 
