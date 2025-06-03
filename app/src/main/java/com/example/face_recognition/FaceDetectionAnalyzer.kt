@@ -1,6 +1,9 @@
 package com.example.face_recognition
 
 import android.annotation.SuppressLint
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Rect
 import android.util.Log
 import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
@@ -9,32 +12,43 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.Face
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
+import java.nio.ByteBuffer
 
-@SuppressLint("UnsafeOptInUsageError") // чтобы не ругался на imageProxy.image
+@SuppressLint("UnsafeOptInUsageError")
 @OptIn(ExperimentalGetImage::class)
 class FaceDetectionAnalyzer(
-    private val onFacesDetected: (faces: List<Face>) -> Unit
+    private val context: Context,
+    private val onFacesDetected: (faces: List<Face>, embeddings: List<FloatArray>) -> Unit
 ) : ImageAnalysis.Analyzer {
 
-    // Настройки детектора лиц — высокая точность и детекция масок тоже работает
     private val detectorOptions = FaceDetectorOptions.Builder()
-        .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST) // Быстрая обработка
-        .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_NONE)       // Можно включить, если нужны точки лица
-        .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE) // Можно включить улыбки и моргания
-        .enableTracking() // Для идентификации лиц в разных кадрах
+        .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
+        .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_NONE)
+        .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
+        .enableTracking()
         .build()
 
     private val detector = FaceDetection.getClient(detectorOptions)
+    private val embedder = FaceEmbedder(context)
 
     override fun analyze(imageProxy: ImageProxy) {
         val mediaImage = imageProxy.image
         if (mediaImage != null) {
-            val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+            val rotation = imageProxy.imageInfo.rotationDegrees
+            val image = InputImage.fromMediaImage(mediaImage, rotation)
 
             detector.process(image)
                 .addOnSuccessListener { faces ->
-                    // Отправляем найденные лица в UI или логику
-                    onFacesDetected(faces)
+                    val bitmap = imageProxy.toBitmap() // 👈 Конвертация imageProxy в Bitmap
+                    val embeddings = mutableListOf<FloatArray>()
+
+                    for (face in faces) {
+                        val faceBitmap = cropFace(bitmap, face.boundingBox)
+                        val embedding = embedder.getEmbedding(faceBitmap)
+                        embeddings.add(embedding)
+                    }
+
+                    onFacesDetected(faces, embeddings)
                     imageProxy.close()
                 }
                 .addOnFailureListener { e ->
@@ -44,5 +58,15 @@ class FaceDetectionAnalyzer(
         } else {
             imageProxy.close()
         }
+    }
+
+    private fun cropFace(bitmap: Bitmap, rect: Rect): Bitmap {
+        val safeRect = Rect(
+            rect.left.coerceIn(0, bitmap.width),
+            rect.top.coerceIn(0, bitmap.height),
+            rect.right.coerceIn(0, bitmap.width),
+            rect.bottom.coerceIn(0, bitmap.height)
+        )
+        return Bitmap.createBitmap(bitmap, safeRect.left, safeRect.top, safeRect.width(), safeRect.height())
     }
 }

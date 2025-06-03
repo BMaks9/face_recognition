@@ -42,10 +42,11 @@ fun FacesOverlay(
 
             val rectLeft = if (isFrontCamera) size.width - right else left
             val rectRight = if (isFrontCamera) size.width - left else right
+            val verticalCorrection = -80f  // экспериментально
 
             drawRect(
                 color = Color.Red,
-                topLeft = Offset(rectLeft, top),
+                topLeft = Offset(rectLeft, top + verticalCorrection),
                 size = Size(rectRight - rectLeft, bottom - top),
                 style = Stroke(width = 4f)
             )
