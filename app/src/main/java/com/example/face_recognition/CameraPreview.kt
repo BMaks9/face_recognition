@@ -27,8 +27,14 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.util.concurrent.Executors
 import com.google.mlkit.vision.face.Face
 
-data class KnownPerson(val name: String, val embeddings: List<FloatArray>)
-private const val SIMILARITY_THRESHOLD = 0.7f
+
+data class KnownPerson(
+    val name: String,
+    val embeddings: MutableList<FloatArray>
+    // List<FloatArray> -> List<List<Float>>
+)
+
+private const val SIMILARITY_THRESHOLD = 0.8f
 
 
 @SuppressLint("RestrictedApi")
@@ -61,6 +67,11 @@ fun CameraPreview(modifier: Modifier = Modifier) {
     var nameInput by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
+
+        val loadedPersons = loadKnownPersonsFromJson(context)
+        knownPersons.clear()
+        knownPersons.addAll(loadedPersons)
+
         startCamera(context, lifecycleOwner, previewView) { detectedFaces, detectedEmbeddings ->
             // Обновляем состояние лиц в UI
             faces.clear()
@@ -126,10 +137,7 @@ fun CameraPreview(modifier: Modifier = Modifier) {
                     val existingPerson = knownPersons.find { it.name == personName }
                     if (existingPerson != null) {
                         if (!isEmbeddingKnown(existingPerson.embeddings, normalized)) {
-                            val updated = existingPerson.embeddings.toMutableList()
-                            updated.add(normalized)
-                            knownPersons.remove(existingPerson)
-                            knownPersons.add(KnownPerson(existingPerson.name, updated))
+                            existingPerson.embeddings.add(normalized)
                             Log.d("FaceRecognition", "Добавлен новый ракурс к $personName")
                         } else {
                             Log.d("FaceRecognition", "Эмбеддинг уже существует для $personName")
@@ -138,6 +146,8 @@ fun CameraPreview(modifier: Modifier = Modifier) {
                         knownPersons.add(KnownPerson(personName, mutableListOf(normalized)))
                         Log.d("FaceRecognition", "Лицо запомнено как $personName")
                     }
+                    saveKnownPersonsToJson(context, knownPersons)
+
                 }
             }) {
                 Text("Запомнить лицо")
@@ -254,3 +264,21 @@ fun findBestMatch(
     return bestMatch?.name
 }
 
+data class SerializableKnownPerson(
+    val name: String,
+    val embeddings: List<List<Float>>
+)
+
+fun KnownPerson.toSerializable(): SerializableKnownPerson {
+    return SerializableKnownPerson(
+        name,
+        embeddings.map { it.toList() }
+    )
+}
+
+fun SerializableKnownPerson.toModel(): KnownPerson {
+    return KnownPerson(
+        name,
+        embeddings.map { it.toFloatArray() }.toMutableList() // <- добавлено toMutableList()
+    )
+}
