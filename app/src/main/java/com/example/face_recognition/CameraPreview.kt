@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.Button
+import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -26,7 +27,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.util.concurrent.Executors
 import com.google.mlkit.vision.face.Face
 
-data class KnownPerson(val name: String, val embedding: FloatArray)
+data class KnownPerson(val name: String, val embeddings: List<FloatArray>)
+private const val SIMILARITY_THRESHOLD = 0.7f
 
 
 @SuppressLint("RestrictedApi")
@@ -56,16 +58,18 @@ fun CameraPreview(modifier: Modifier = Modifier) {
     val knownPersons = remember { mutableStateListOf<KnownPerson>() }
     var lastEmbedding by remember { mutableStateOf<List<Float>?>(null) }
 
+    var nameInput by remember { mutableStateOf("") }
+
     LaunchedEffect(Unit) {
         startCamera(context, lifecycleOwner, previewView) { detectedFaces, detectedEmbeddings ->
             // Обновляем состояние лиц в UI
             faces.clear()
             faces.addAll(detectedFaces)
 
-            // Распознаём эмбеддинги
+            faceNames.clear()
             detectedEmbeddings.forEach { embedding ->
-                val matched = isEmbeddingKnown(knownPersons.map { it.embedding }, embedding, threshold = 0.9f)
-                Log.d("Recognition_face", if (matched) "Лицо распознано!" else "Незнакомец.")
+                val matchedName = findBestMatch(knownPersons, embedding)
+                faceNames.add(matchedName ?: "Незнакомец")
             }
 
             // Обновляем последний эмбеддинг (например, первого лица)
@@ -93,20 +97,46 @@ fun CameraPreview(modifier: Modifier = Modifier) {
             isFrontCamera = isFrontCamera,
             modifier = Modifier.matchParentSize()
         )
+
         Column(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.Bottom,
             horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Button(onClick = {
+        )
+        {
 
+            OutlinedTextField(
+            value = nameInput,
+            onValueChange = { nameInput = it },
+            label = { Text("Введите имя") }
+        )
+            Button(onClick = {
                 lastEmbedding?.let { embedding ->
                     val embeddingArray = embedding.toFloatArray()
-                    if (!isEmbeddingKnown(knownPersons.map { it.embedding }, embeddingArray)) {
-                        knownPersons.add(KnownPerson("Пользователь ${knownPersons.size + 1}", embeddingArray))
-                        Log.d("FaceRecognition", "Лицо запомнено!")
+                    val normalized = normalize(embeddingArray)
+
+                    // Если поле пустое, используем предыдущее имя или создаём автоматическое
+                    val personName = if (nameInput.isNotBlank()) nameInput else "Пользователь ${knownPersons.size + 1}"
+
+                    // Сохраняем имя, если было введено впервые
+                    if (nameInput.isNotBlank()) {
+                        nameInput = personName // запоминаем
+                    }
+
+                    val existingPerson = knownPersons.find { it.name == personName }
+                    if (existingPerson != null) {
+                        if (!isEmbeddingKnown(existingPerson.embeddings, normalized)) {
+                            val updated = existingPerson.embeddings.toMutableList()
+                            updated.add(normalized)
+                            knownPersons.remove(existingPerson)
+                            knownPersons.add(KnownPerson(existingPerson.name, updated))
+                            Log.d("FaceRecognition", "Добавлен новый ракурс к $personName")
+                        } else {
+                            Log.d("FaceRecognition", "Эмбеддинг уже существует для $personName")
+                        }
                     } else {
-                        Log.d("FaceRecognition", "Это лицо уже есть в базе.")
+                        knownPersons.add(KnownPerson(personName, mutableListOf(normalized)))
+                        Log.d("FaceRecognition", "Лицо запомнено как $personName")
                     }
                 }
             }) {
@@ -174,42 +204,53 @@ fun cosineSimilarity(vec1: FloatArray, vec2: FloatArray): Float {
     val normB = kotlin.math.sqrt(vec2.fold(0.0) { acc, f -> acc + f * f })
     return (dot / (normA * normB + 1e-6)).toFloat()
 }
+fun normalize(vector: FloatArray): FloatArray {
+    val norm = kotlin.math.sqrt(vector.fold(0.0) { acc, v -> acc + v * v }).toFloat()
+    return if (norm == 0f) vector else vector.map { it / norm }.toFloatArray()
+}
 
 fun isEmbeddingKnown(
     knownEmbeddings: List<FloatArray>,
     newEmbedding: FloatArray,
-    threshold: Float = 0.7f
+    threshold: Float = SIMILARITY_THRESHOLD
 ): Boolean {
+    val normalizedNew = normalize(newEmbedding)
     return knownEmbeddings.any { known ->
-        cosineSimilarity(known, newEmbedding) > threshold
+        val normalizedKnown = normalize(known)
+        cosineSimilarity(normalizedKnown, normalizedNew) > threshold
     }
 }
 
 fun addEmbeddingIfNew(
     knownEmbeddings: MutableList<FloatArray>,
     newEmbedding: FloatArray,
-    threshold: Float = 0.7f
+    threshold: Float = 0.6f
 ) {
     if (!isEmbeddingKnown(knownEmbeddings, newEmbedding, threshold)) {
         knownEmbeddings.add(newEmbedding)
     }
 }
 
+
 fun findBestMatch(
     knownPersons: List<KnownPerson>,
     newEmbedding: FloatArray,
-    threshold: Float = 0.8f
+    threshold: Float = SIMILARITY_THRESHOLD
 ): String? {
+    val normalizedNew = normalize(newEmbedding)
     var bestScore = -1f
     var bestMatch: KnownPerson? = null
 
     for (person in knownPersons) {
-        val score = cosineSimilarity(person.embedding, newEmbedding)
-        if (score > bestScore && score > threshold) {
-            bestScore = score
-            bestMatch = person
+        for (embedding in person.embeddings) {
+            val score = cosineSimilarity(normalize(embedding), normalizedNew)
+            if (score > bestScore && score > threshold) {
+                bestScore = score
+                bestMatch = person
+            }
         }
     }
 
     return bestMatch?.name
 }
+
