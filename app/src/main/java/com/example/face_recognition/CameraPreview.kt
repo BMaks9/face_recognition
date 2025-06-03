@@ -26,6 +26,9 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.util.concurrent.Executors
 import com.google.mlkit.vision.face.Face
 
+data class KnownPerson(val name: String, val embedding: FloatArray)
+
+
 @SuppressLint("RestrictedApi")
 @Composable
 fun CameraPreview(modifier: Modifier = Modifier) {
@@ -48,7 +51,9 @@ fun CameraPreview(modifier: Modifier = Modifier) {
     val imageSize = android.util.Size(640, 480)
     val isFrontCamera = true
 
-    val knownEmbeddings = remember { mutableStateListOf<FloatArray>() }
+    val faceNames = remember { mutableStateListOf<String>() }
+
+    val knownPersons = remember { mutableStateListOf<KnownPerson>() }
     var lastEmbedding by remember { mutableStateOf<List<Float>?>(null) }
 
     LaunchedEffect(Unit) {
@@ -59,7 +64,7 @@ fun CameraPreview(modifier: Modifier = Modifier) {
 
             // Распознаём эмбеддинги
             detectedEmbeddings.forEach { embedding ->
-                val matched = isEmbeddingKnown(knownEmbeddings, embedding, threshold = 0.9f)
+                val matched = isEmbeddingKnown(knownPersons.map { it.embedding }, embedding, threshold = 0.9f)
                 Log.d("Recognition_face", if (matched) "Лицо распознано!" else "Незнакомец.")
             }
 
@@ -82,6 +87,7 @@ fun CameraPreview(modifier: Modifier = Modifier) {
         )
         FacesOverlay(
             faces = faces,
+            names = faceNames,
             previewViewSize = previewViewSize.value,
             imageSize = imageSize,
             isFrontCamera = isFrontCamera,
@@ -96,8 +102,8 @@ fun CameraPreview(modifier: Modifier = Modifier) {
 
                 lastEmbedding?.let { embedding ->
                     val embeddingArray = embedding.toFloatArray()
-                    if (!isEmbeddingKnown(knownEmbeddings, embeddingArray)) {
-                        knownEmbeddings.add(embeddingArray)
+                    if (!isEmbeddingKnown(knownPersons.map { it.embedding }, embeddingArray)) {
+                        knownPersons.add(KnownPerson("Пользователь ${knownPersons.size + 1}", embeddingArray))
                         Log.d("FaceRecognition", "Лицо запомнено!")
                     } else {
                         Log.d("FaceRecognition", "Это лицо уже есть в базе.")
@@ -187,4 +193,23 @@ fun addEmbeddingIfNew(
     if (!isEmbeddingKnown(knownEmbeddings, newEmbedding, threshold)) {
         knownEmbeddings.add(newEmbedding)
     }
+}
+
+fun findBestMatch(
+    knownPersons: List<KnownPerson>,
+    newEmbedding: FloatArray,
+    threshold: Float = 0.8f
+): String? {
+    var bestScore = -1f
+    var bestMatch: KnownPerson? = null
+
+    for (person in knownPersons) {
+        val score = cosineSimilarity(person.embedding, newEmbedding)
+        if (score > bestScore && score > threshold) {
+            bestScore = score
+            bestMatch = person
+        }
+    }
+
+    return bestMatch?.name
 }
