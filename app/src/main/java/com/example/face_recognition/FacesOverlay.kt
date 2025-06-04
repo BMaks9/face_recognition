@@ -44,7 +44,7 @@ fun FacesOverlay(
 
             val rectLeft = if (isFrontCamera) size.width - right else left
             val rectRight = if (isFrontCamera) size.width - left else right
-            val verticalCorrection = -80f  // экспериментально
+            val verticalCorrection = -160f  // экспериментально
 
             // Рисуем прямоугольник
             drawRect(

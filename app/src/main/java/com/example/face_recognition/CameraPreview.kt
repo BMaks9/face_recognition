@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.util.Log
 import android.util.Size
+import android.view.MotionEvent
 import android.view.ViewGroup
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -11,154 +12,211 @@ import androidx.camera.view.PreviewView
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.Button
 import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import java.util.concurrent.Executors
 import com.google.mlkit.vision.face.Face
-
+import java.util.concurrent.Executors
 
 data class KnownPerson(
     val name: String,
     val embeddings: MutableList<FloatArray>
-    // List<FloatArray> -> List<List<Float>>
 )
 
 private const val SIMILARITY_THRESHOLD = 0.85f
 
 
 @SuppressLint("RestrictedApi")
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
-fun CameraPreview(modifier: Modifier = Modifier) {
+fun CameraPreview(
+    modifier: Modifier = Modifier,
+    showDefaultName: Boolean,
+    onShowDefaultNameChanged: ((Boolean) -> Unit)? = null
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    val faces = remember { mutableStateListOf<Face>() }
-    val previewView = remember {
-        PreviewView(context).apply {
-            layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-            scaleType = PreviewView.ScaleType.FILL_CENTER
-            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-        }
-    }
-
-    val previewViewSize = remember { mutableStateOf(android.util.Size(0, 0)) }
-    val imageSize = android.util.Size(1280, 720)
+    val previewView = rememberPreviewView(context)
+    val previewViewSize = remember { mutableStateOf(Size(0, 0)) }
+    val imageSize = Size(1280, 720)
     val isFrontCamera = true
 
-    val faceNames = remember { mutableStateListOf<String>() }
-
     val knownPersons = remember { mutableStateListOf<KnownPerson>() }
-    var lastEmbedding by remember { mutableStateOf<List<Float>?>(null) }
+    val faces = remember { mutableStateListOf<Face>() }
+    val faceCache = remember { mutableStateMapOf<String, String>() }
 
+    var lastEmbedding by remember { mutableStateOf<FloatArray?>(null) }
     var nameInput by remember { mutableStateOf("") }
 
-    LaunchedEffect(Unit) {
+    var isButtonPressed by remember { mutableStateOf(false) } // новое состояние удержания
 
-        val loadedPersons = loadKnownPersonsFromJson(context)
+    // Загрузка известных лиц из хранилища
+    LaunchedEffect(Unit) {
         knownPersons.clear()
-        knownPersons.addAll(loadedPersons)
+        knownPersons.addAll(loadKnownPersonsFromJson(context))
 
         startCamera(context, lifecycleOwner, previewView) { detectedFaces, detectedEmbeddings ->
-            // Обновляем состояние лиц в UI
             faces.clear()
             faces.addAll(detectedFaces)
 
-            faceNames.clear()
-            detectedEmbeddings.forEach { embedding ->
-                val matchedName = findBestMatch(knownPersons, embedding)
-                faceNames.add(matchedName ?: "Незнакомец")
+            faceCache.clear()
+            detectedFaces.zip(detectedEmbeddings).forEach { (face, embedding) ->
+                faceCache[faceKey(face)] = findBestMatch(knownPersons, embedding) ?: "Незнакомец"
             }
 
-            // Обновляем последний эмбеддинг (например, первого лица)
-            lastEmbedding = detectedEmbeddings.firstOrNull()?.toList()
-
+            lastEmbedding = detectedEmbeddings.firstOrNull()
         }
     }
 
+    val displayedNames = getDisplayedNames(faces, faceCache, showDefaultName, isButtonPressed)
 
-
-    Box(modifier = modifier.fillMaxSize()) {
-        AndroidView(factory = { previewView }, modifier = Modifier
-            .matchParentSize()
-            .onGloballyPositioned { layoutCoordinates ->
-                val width = layoutCoordinates.size.width
-                val height = layoutCoordinates.size.height
-                previewViewSize.value = android.util.Size(width, height)
-            }
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Камера превью
+        AndroidView(
+            factory = { previewView },
+            modifier = Modifier
+                .matchParentSize()
+                .onGloballyPositioned {
+                    previewViewSize.value = Size(it.size.width, it.size.height)
+                }
         )
+
+        // Отображение рамок и имен
         FacesOverlay(
             faces = faces,
-            names = faceNames,
+            names = displayedNames,
             previewViewSize = previewViewSize.value,
             imageSize = imageSize,
             isFrontCamera = isFrontCamera,
             modifier = Modifier.matchParentSize()
         )
 
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.Bottom,
-            horizontalAlignment = Alignment.CenterHorizontally
-        )
-        {
-
-            OutlinedTextField(
-            value = nameInput,
-            onValueChange = { nameInput = it },
-            label = { Text("Введите имя") }
-        )
-            Button(onClick = {
-                lastEmbedding?.let { embedding ->
-                    val embeddingArray = embedding.toFloatArray()
-                    val normalized = normalize(embeddingArray)
-
-                    // Если поле пустое, используем предыдущее имя или создаём автоматическое
-                    val personName = if (nameInput.isNotBlank()) nameInput else "Пользователь ${knownPersons.size + 1}"
-
-                    // Сохраняем имя, если было введено впервые
-                    if (nameInput.isNotBlank()) {
-                        nameInput = personName // запоминаем
-                    }
-
-                    val existingPerson = knownPersons.find { it.name == personName }
-                    if (existingPerson != null) {
-                        if (!isEmbeddingKnown(existingPerson.embeddings, normalized)) {
-                            existingPerson.embeddings.add(normalized)
-                            Log.d("FaceRecognition", "Добавлен новый ракурс к $personName")
-                        } else {
-                            Log.d("FaceRecognition", "Эмбеддинг уже существует для $personName")
+        // 👉 Кнопка удержания — нижний левый угол
+        Button(
+            onClick = { /* пусто */ },
+            modifier = Modifier
+                .size(width = 80.dp, height = 80.dp)
+                .align(Alignment.BottomStart)
+                .padding(start = 10.dp, bottom = 10.dp)
+                .alpha(0.0f)
+                .pointerInteropFilter { event ->
+                    when (event.action) {
+                        MotionEvent.ACTION_DOWN -> {
+                            isButtonPressed = true
+                            true
                         }
-                    } else {
-                        knownPersons.add(KnownPerson(personName, mutableListOf(normalized)))
-                        Log.d("FaceRecognition", "Лицо запомнено как $personName")
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            isButtonPressed = false
+                            true
+                        }
+                        else -> false
                     }
-                    saveKnownPersonsToJson(context, knownPersons)
-
                 }
+        ) {
+            Text("")
+        }
+
+        // 👉 Поле ввода и кнопка "Запомнить" — нижний центр
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            OutlinedTextField(
+                value = nameInput,
+                onValueChange = { nameInput = it },
+                label = { Text("Введите имя") }
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Button(onClick = {
+                handleEmbedding(nameInput, lastEmbedding, knownPersons, context)
             }) {
                 Text("Запомнить лицо")
             }
-
         }
+    }
+
 }
+
+@Composable
+private fun rememberPreviewView(context: Context): PreviewView {
+    return remember {
+        PreviewView(context).apply {
+            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            scaleType = PreviewView.ScaleType.FILL_CENTER
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+        }
+    }
 }
 
+private fun handleEmbedding(
+    nameInput: String,
+    embedding: FloatArray?,
+    knownPersons: MutableList<KnownPerson>,
+    context: Context
+) {
+    embedding?.let {
+        val normalized = normalize(it)
+        val name = nameInput.ifBlank { "Пользователь ${knownPersons.size + 1}" }
 
+        val existingPerson = knownPersons.find { person -> person.name == name }
+        if (existingPerson != null) {
+            if (!isEmbeddingKnown(existingPerson.embeddings, normalized)) {
+                existingPerson.embeddings.add(normalized)
+                Log.d("FaceRecognition", "Добавлен ракурс к $name")
+            }
+        } else {
+            knownPersons.add(KnownPerson(name, mutableListOf(normalized)))
+            Log.d("FaceRecognition", "Новое лицо: $name")
+        }
 
+        saveKnownPersonsToJson(context, knownPersons)
+    }
+}
+
+private fun getDisplayedNames(
+    faces: List<Face>,
+    faceCache: Map<String, String>,
+    showDefaultName: Boolean,
+    isButtonPressed: Boolean = false,
+    pressedText: String = "Максим"
+): List<String> {
+    return if (isButtonPressed) {
+        List(faces.size) { pressedText }
+    } else {
+        faces.map { face ->
+            val key = faceKey(face)
+            if (showDefaultName) "Максим" else faceCache[key] ?: ""
+        }
+    }
+}
+
+fun faceKey(face: Face): String {
+    val box = face.boundingBox
+    return "${box.centerX() / 10}_${box.centerY() / 10}_${box.width() / 10}_${box.height() / 10}"
+}
 
 private fun startCamera(
     context: Context,
@@ -214,6 +272,7 @@ fun cosineSimilarity(vec1: FloatArray, vec2: FloatArray): Float {
     val normB = kotlin.math.sqrt(vec2.fold(0.0) { acc, f -> acc + f * f })
     return (dot / (normA * normB + 1e-6)).toFloat()
 }
+
 fun normalize(vector: FloatArray): FloatArray {
     val norm = kotlin.math.sqrt(vector.fold(0.0) { acc, v -> acc + v * v }).toFloat()
     return if (norm == 0f) vector else vector.map { it / norm }.toFloatArray()
@@ -230,17 +289,6 @@ fun isEmbeddingKnown(
         cosineSimilarity(normalizedKnown, normalizedNew) > threshold
     }
 }
-
-fun addEmbeddingIfNew(
-    knownEmbeddings: MutableList<FloatArray>,
-    newEmbedding: FloatArray,
-    threshold: Float = 0.6f
-) {
-    if (!isEmbeddingKnown(knownEmbeddings, newEmbedding, threshold)) {
-        knownEmbeddings.add(newEmbedding)
-    }
-}
-
 
 fun findBestMatch(
     knownPersons: List<KnownPerson>,
@@ -263,6 +311,10 @@ fun findBestMatch(
 
     return bestMatch?.name
 }
+
+// Здесь loadKnownPersonsFromJson и saveKnownPersonsToJson — твои функции загрузки/сохранения данных лиц, их нужно определить отдельно.
+
+
 
 data class SerializableKnownPerson(
     val name: String,
